@@ -22,7 +22,15 @@ jobs:
         with:
           node-version: 20
 
-      # ffmpeg is preinstalled on ubuntu-latest — no install step (apt hangs caused 25+ min delays)
+      # Static FFmpeg build (ffmpeg was removed from ubuntu-24.04 runner images; apt hangs)
+      - name: Set up FFmpeg
+        run: |
+          curl -sSL https://www.johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
+          mkdir -p /tmp/ffmpegx
+          tar -xf /tmp/ffmpeg.tar.xz -C /tmp/ffmpegx --strip-components=1
+          sudo cp /tmp/ffmpegx/ffmpeg /tmp/ffmpegx/ffprobe /usr/local/bin/
+          ffmpeg -version | head -1
+
       - name: Render and upload
         env:
           RENDER_UPLOAD_SECRET: ${{ secrets.RENDER_UPLOAD_SECRET }}
