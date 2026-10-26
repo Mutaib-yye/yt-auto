@@ -67,6 +67,15 @@ function cameraFilter(camera, frames) {
   }
 }
 
+// Animated light-wash palettes — a slow moving color gradient blended over each
+// scene, cycling through moods. Pure FFmpeg, adds no render cost beyond seconds.
+const WASHES = [
+  { c0: "0x30200a", c1: "0x0a0502", x0: 0.1, y0: 0.9, x1: 0.9, y1: 0.2 }, // ember
+  { c0: "0x0a1a30", c1: "0x020408", x0: 0.9, y0: 0.1, x1: 0.2, y1: 0.8 }, // moonlit
+  { c0: "0x2a1208", c1: "0x060201", x0: 0.2, y0: 0.2, x1: 0.8, y1: 0.9 }, // firelight
+  { c0: "0x12240f", c1: "0x030602", x0: 0.8, y0: 0.8, x1: 0.1, y1: 0.3 }, // wildwood
+];
+
 const segments = [];
 try {
   const n = payload.images.length;
@@ -82,15 +91,25 @@ try {
     segments.push(out);
 
     const fadeDur = Math.min(0.45, dur / 4).toFixed(3);
-    console.log(`Segment ${i + 1}/${n} (${dur.toFixed(1)}s, camera ${payload.images[i].camera ?? "zoom-in"})`);
+    const wash = WASHES[i % WASHES.length];
+    const op = (0.09 + (i % 3) * 0.02).toFixed(2);
+    const px = (f) => Math.round(f * W).toString();
+    const py = (f) => Math.round(f * H).toString();
+    const grad =
+      `gradients=s=${W}x${H}:c0=${wash.c0}:c1=${wash.c1}:` +
+      `x0=${px(wash.x0)}:y0=${py(wash.y0)}:x1=${px(wash.x1)}:y1=${py(wash.y1)}:speed=0.02`;
+    console.log(`Segment ${i + 1}/${n} (${dur.toFixed(1)}s, camera ${payload.images[i].camera ?? "zoom-in"}, wash ${i % WASHES.length})`);
     await ff([
       "-loop", "1", "-i", imgFile,
       "-i", audFile,
+      "-f", "lavfi", "-i", grad,
       "-filter_complex",
       `[0:v]${cameraFilter(payload.images[i].camera ?? "zoom-in", frames)},` +
         `eq=contrast=1.06:saturation=1.08,` +
-        `vignette=PI/5,` +
-        `fade=t=in:st=0:d=${fadeDur},fade=t=out:st=${(dur - 0.2).toFixed(3)}:d=0.2,` +
+        `vignette=PI/5[bg];` +
+        `[2:v]format=yuv420p[gr];` +
+        `[bg][gr]blend=all_mode=screen:all_opacity=${op}[lw];` +
+        `[lw]fade=t=in:st=0:d=${fadeDur},fade=t=out:st=${(dur - 0.2).toFixed(3)}:d=0.2,` +
         `format=yuv420p[v];` +
         `[1:a]aresample=48000,apad=whole_dur=${dur.toFixed(3)}[a]`,
       "-map", "[v]", "-map", "[a]",
@@ -137,10 +156,12 @@ try {
       "[V4+ Styles]",
       "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
       `Style: Title,${FONT_FAMILY},54,&H00FFFFFF,&H000000FF,&H8C000000,&H8C000000,0,0,0,0,100,100,0,0,3,18,0,8,60,60,${Math.round(H * 0.16)},1`,
+      `Style: Outro,${FONT_FAMILY},44,&H00FFFFFF,&H000000FF,&H8C000000,&H8C000000,0,0,0,0,100,100,0,0,3,14,0,5,60,60,0,1`,
       "",
       "[Events]",
       "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-      `Dialogue: 0,${assTime(0.6)},${assTime(6.5)},Title,,0,0,0,,{\\fad(600,600)}${esc(TITLE)}`,
+      `Dialogue: 0,${assTime(0.6)},${assTime(6.5)},Title,,0,0,0,,{\\fad(600,600)\\move(${Math.round(W / 2)},${Math.round(H * 0.16) + 60},${Math.round(W / 2)},${Math.round(H * 0.16)},0,2400)}${esc(TITLE)}`,
+      `Dialogue: 0,${assTime(Math.max(6.6, totalDuration - 8))},${assTime(Math.max(7, totalDuration - 0.6))},Outro,,0,0,0,,{\\fad(900,700)}New story every night — Subscribe`,
       "",
     ].join("\n"),
   );
