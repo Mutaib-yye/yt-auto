@@ -4,7 +4,7 @@
 // title card, burned captions), uploads through a one-time signed upload URL,
 // then calls back the app.
 import { createHmac } from "node:crypto";
-import { createReadStream, createWriteStream, existsSync, statSync } from "node:fs";
+import { createReadStream, statSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { tmpdir } from "node:os";
@@ -22,22 +22,18 @@ const TITLE = payload.config?.title ?? "History documentary";
 const RENDER_UPLOAD_SECRET = process.env.RENDER_UPLOAD_SECRET;
 if (!RENDER_UPLOAD_SECRET) throw new Error("RENDER_UPLOAD_SECRET secret is missing on the runner");
 
-const TITLE_FONT_CANDIDATES = [
-  "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
-  "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
-  "/usr/share/fonts/dejavu/DejaVuSerif-Bold.ttf",
-];
-const TITLE_FONT = TITLE_FONT_CANDIDATES.find((f) => existsSync(f));
-const CAPTION_FONT_CANDIDATES = [
-  "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
-  "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
-  "/usr/share/fonts/dejavu/DejaVuSerif.ttf",
-];
-const CAPTION_FONT = CAPTION_FONT_CANDIDATES.find((f) => existsSync(f));
-
-// escape drawtext values: ffmpeg's filtergraph parser splits on ':' and '%'
+// The runner's static FFmpeg has libass (subtitles/ass) but no drawtext filter,
+// so the title card and captions are both burned via ASS subtitle files.
+// ASS escapes: strip braces/backslashes/newlines from display text.
 function esc(t) {
-  return t.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/:/g, "\\:").replace(/%/g, "\\%");
+  return t.replace(/[{}\\\r\n]/g, " ").trim();
+}
+
+function assTime(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${h}:${String(m).padStart(2, "0")}:${s.toFixed(2).padStart(5, "0")}`;
 }
 
 const work = await mkdtemp(path.join(tmpdir(), "render-"));
@@ -117,26 +113,44 @@ try {
 
   // finishing pass: film grain + burned captions + title card + closing fade
   const final = path.join(work, "final.mp4");
-  const captionStyle = CAPTION_FONT
-    ? `FontFile=${CAPTION_FONT},FontSize=17,Outline=2,Shadow=1,MarginV=48`
-    : `FontName=Georgia,FontSize=17,Outline=2,Shadow=1,MarginV=48`;
+  // Captions via libass: pick a serif font present on the runner, else libass default.
+  const FONTS_DIR = "/usr/share/fonts";
+  const FONT_CANDIDATES = ["DejaVu Serif", "Liberation Serif", "FreeSerif"];
+  const FONT_FAMILY = FONT_CANDIDATES[0]; // ubuntu-24.04 runners ship DejaVu fonts
+  const captionStyle = `FontName=${FONT_FAMILY},FontSize=17,Outline=2,Shadow=1,MarginV=48`;
 
   const totalDuration = payload.narration.reduce((s, x) => s + x.duration_ms / 1000, 0) + n * 0.8;
 
-  let titleFadeIn = "";
-  if (TITLE_FONT) {
-    titleFadeIn =
-      `,drawtext=fontfile='${TITLE_FONT}':text='${esc(TITLE)}':fontcolor=white:fontsize=54:` +
-      `x=(w-text_w)/2:y=h*0.16:box=1:boxcolor=black@0.45:boxborderw=18:` +
-      `alpha='if(lt(t,0.6),0,if(lt(t,1.2),(t-0.6)/0.6,1))'`;
-  }
+  // Title card as an ASS overlay (drawtext is unavailable on the static build).
+  // Top-center, white serif on a soft black box, fade in/out over the first 6.5s.
+  const titleAss = path.join(work, "title.ass");
+  await writeFile(
+    titleAss,
+    [
+      "[Script Info]",
+      "ScriptType: v4.00+",
+      "WrapStyle: 0",
+      "ScaledBorderAndShadow: yes",
+      `PlayResX: ${W}`,
+      `PlayResY: ${H}`,
+      "",
+      "[V4+ Styles]",
+      "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+      `Style: Title,${FONT_FAMILY},54,&H00FFFFFF,&H000000FF,&H8C000000,&H8C000000,0,0,0,0,100,100,0,0,3,18,0,8,60,60,${Math.round(H * 0.16)},1`,
+      "",
+      "[Events]",
+      "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+      `Dialogue: 0,${assTime(0.6)},${assTime(6.5)},Title,,0,0,0,,{\\fad(600,600)}${esc(TITLE)}`,
+      "",
+    ].join("\n"),
+  );
 
   console.log("Finishing pass (grain, title card, captions)");
   await ff([
     "-i", base,
     "-vf",
-    `subtitles=${srtFile}:force_style='${captionStyle}'` +
-      titleFadeIn +
+    `subtitles=${srtFile}:force_style='${captionStyle}':fontsdir=${FONTS_DIR}` +
+      `,subtitles=${titleAss}:fontsdir=${FONTS_DIR}` +
       `,noise=alls=5:allf=t+u,` +
       `fade=t=out:st=${Math.max(0, totalDuration - 1.5)}:d=1.5` +
       `,format=yuv420p`,
