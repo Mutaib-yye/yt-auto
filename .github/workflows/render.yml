@@ -22,9 +22,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install FFmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-
+      # ffmpeg is preinstalled on ubuntu-latest — no install step (apt hangs caused 25+ min delays)
       - name: Render and upload
         env:
           RENDER_UPLOAD_SECRET: ${{ secrets.RENDER_UPLOAD_SECRET }}
