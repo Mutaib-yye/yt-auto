@@ -1,1 +1,29 @@
-{"message":"Add video render workflow","content":"eyJiZGxvc2FNIjYqCmQ1ZGH4bXRlcGhBYWpkZGlwZGF0fWorkflow","content":"eyI5ImhOYjRXMjlpYVh2dms3dWhrZWtkZGlrWWFqcFJlc2ZsVHhXZnZuclN0blVpbGl2ZmxiOGxsci1HcGhzdllpc1RqSWZtSWJQU21rdi1pMV12WXc1NWVwcwpOWTBxanFTSVcxdmNqbWJLUGFjUW5YY2dOU2xlTmlUSTlVenpoTk1WTDh3ZWhlcjl5cEN2dUNqdVZVZGFLMXJUNEhPdmMvUkVkSTFaZ1VuUXlXcllkcG16S3VBS013TUlMVW1haU4yaUZWVlJEU2lzbGlpM3pSaWVlTkFveW1BNWxqaEFMWWxadm9SdmplMVZuQ1lTYlRCZnFRWDdZV0FfTFU1VlE="}
+name: Render episode video
+
+on:
+  repository_dispatch:
+    types: [render-request]
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: "Full render payload JSON"
+        required: true
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      PAYLOAD: ${{ github.event_name == 'repository_dispatch' && toJSON(github.event.client_payload) || inputs.payload }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: Render and upload
+        run: node render/render.mjs
