@@ -185,22 +185,27 @@ try {
     throw new Error(`Upload failed [${up.status}]: ${body.slice(0, 300)}`);
   }
 
-  // callback
-  const body = JSON.stringify({
-    job_id: payload.job_id,
-    video_path: decodeURIComponent((new URL(payload.upload_url).pathname.split("/object/sign/")[1] ?? "").split("?")[0]),
-    duration_seconds: duration,
-  });
-  const signature = createHmac("sha256", RENDER_UPLOAD_SECRET).update(body).digest("hex");
-  const cb = await fetch(`${payload.app_url}/api/public/renders/callback`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Render-Signature": signature },
-    body,
-  });
-  console.log(`Callback: ${cb.status}`);
-  if (!cb.ok) {
-    const t = await cb.text().catch(() => "");
-    throw new Error(`Callback failed [${cb.status}]: ${t.slice(0, 300)}`);
+  // callback — if it is blocked (e.g. preview auth wall), the app's pipeline
+  // tick recovers from the uploaded file, so a failed callback is not fatal.
+  try {
+    const body = JSON.stringify({
+      job_id: payload.job_id,
+      video_path: decodeURIComponent((new URL(payload.upload_url).pathname.split("/object/sign/")[1] ?? "").split("?")[0]),
+      duration_seconds: duration,
+    });
+    const signature = createHmac("sha256", RENDER_UPLOAD_SECRET).update(body).digest("hex");
+    const cb = await fetch(`${payload.app_url}/api/public/renders/callback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Render-Signature": signature },
+      body,
+    });
+    console.log(`Callback: ${cb.status}`);
+    if (!cb.ok) {
+      const t = await cb.text().catch(() => "");
+      console.warn(`Callback failed [${cb.status}]: ${t.slice(0, 300)} — video is uploaded; the pipeline tick will complete this episode.`);
+    }
+  } catch (e) {
+    console.warn(`Callback error: ${e.message} — video is uploaded; the pipeline tick will complete this episode.`);
   }
 } finally {
   await rm(work, { recursive: true, force: true });
